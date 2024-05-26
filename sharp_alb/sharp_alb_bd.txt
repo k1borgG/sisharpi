@@ -1,0 +1,82 @@
+DROP TABLE IF EXISTS Taxes;
+DROP TABLE IF EXISTS ExpenseCategoryMappings;
+DROP TABLE IF EXISTS Expenses;
+DROP TABLE IF EXISTS ExpenseCategories;
+DROP TABLE IF EXISTS Employees;
+
+
+CREATE TABLE Employees (
+    employee_id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+CREATE TABLE ExpenseCategories (
+    category_id SERIAL PRIMARY KEY,
+    category_name TEXT NOT NULL,
+    category_cost DECIMAL(10, 2) NOT NULL
+);
+
+CREATE TABLE Expenses (
+    expense_id SERIAL PRIMARY KEY,
+    employee_id INTEGER,
+    amount DECIMAL(10, 2) NOT NULL,
+    date DATE NOT NULL,
+    reported BOOLEAN NOT NULL DEFAULT FALSE,
+    FOREIGN KEY (employee_id) REFERENCES Employees(employee_id) ON DELETE CASCADE
+);
+
+CREATE TABLE ExpenseCategoryMappings (
+    expense_id INTEGER,
+    category_id INTEGER,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (expense_id, category_id),
+    FOREIGN KEY (expense_id) REFERENCES Expenses(expense_id) ON DELETE CASCAD,
+    FOREIGN KEY (category_id) REFERENCES ExpenseCategories(category_id) ON DELETE CASCAD
+);
+
+CREATE TABLE Taxes (
+    tax_id SERIAL PRIMARY KEY,
+    expense_id INTEGER,
+    tax_amount DECIMAL(10, 2),
+    FOREIGN KEY (expense_id) REFERENCES Expenses(expense_id) ON DELETE CASCADE,
+    CONSTRAINT unique_expense_id UNIQUE (expense_id)
+);
+
+
+CREATE OR REPLACE FUNCTION recalculate_taxes()
+RETURNS TRIGGER AS $$
+DECLARE
+    total_amount DECIMAL(10, 2);
+    tax_amount DECIMAL(10, 2);
+BEGIN
+    -- Вычисляем общую сумму по категориям для данного расхода
+    SELECT SUM(ec.category_cost * ecm.quantity)
+    INTO total_amount
+    FROM ExpenseCategoryMappings ecm
+    JOIN ExpenseCategories ec ON ecm.category_id = ec.category_id
+    WHERE ecm.expense_id = NEW.expense_id;
+    
+    -- Вычисляем налог (13% от общей суммы)
+    tax_amount = total_amount * 0.13;
+
+    -- Обновляем или вставляем запись в таблицу Taxes
+    INSERT INTO Taxes (expense_id, tax_amount)
+    VALUES (NEW.expense_id, tax_amount)
+    ON CONFLICT (expense_id)
+    DO UPDATE SET tax_amount = EXCLUDED.tax_amount;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Создание триггера
+CREATE TRIGGER recalculate_taxes_trigger
+AFTER INSERT ON ExpenseCategoryMappings
+FOR EACH ROW
+EXECUTE FUNCTION recalculate_taxes();
+
+CREATE TRIGGER recalculate_taxes_after_update
+AFTER UPDATE ON ExpenseCategoryMappings
+FOR EACH ROW
+EXECUTE FUNCTION recalculate_taxes();
+
